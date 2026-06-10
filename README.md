@@ -86,21 +86,33 @@ Build de produção: `npm run build` (gera `dist/`); `npm run preview` para serv
 
 **Cliente** (sem login): navega por categorias (scroll-spy), `+`/`–` por item, barra
 flutuante com total, e para gerar o pedido informa **nome, e-mail e telefone**
-(validados). A confirmação mostra **número do pedido + contato** para o caixa.
+(validados). Ao gerar, o pedido é criado no servidor (`create_order`) e recebe um
+**número único** vindo de uma sequence do Postgres (não repete entre celulares). A
+confirmação mostra esse número + contato para o caixa.
+
+**Atualização ao vivo:** o cardápio do cliente usa Supabase Realtime — quando o admin
+salva uma alteração de preço, quem está com a página aberta vê o novo valor na hora
+(sem recarregar). Editar preço durante o evento é seguro: a `replace_menu` atualiza pelo
+id, então itens que já estavam na sacola do cliente permanecem (só o preço muda).
 
 **Admin** (login OTP por e-mail, restrito à allowlist): edita nome, descrição e preço,
 adiciona/remove itens e categorias, e salva. O salvamento grava no Supabase via a função
-`replace_menu` (atômica e protegida por `is_admin()`). A sessão dura conforme a config do
-Supabase Auth.
+`replace_menu` (atômica, atualiza pelo id, protegida por `is_admin()`). A sessão dura
+conforme a config do Supabase Auth.
+
+**Pedidos** ficam salvos nas tabelas `orders` / `order_items` (com snapshot de nome e
+preço do momento). Só o admin lê (RLS). Hoje a consulta é direta no banco
+(Supabase Studio); uma tela de listagem de pedidos no admin é um próximo passo possível.
 
 ## Limitações conhecidas (escopo atual)
 
-- **Número do pedido** é um contador **local de cada navegador** — não é único entre
-  aparelhos. Para o caixa, o nome + itens identificam o pedido. Numeração global exigiria
-  persistir pedidos no banco (fora do escopo desta etapa).
+- **Sem tela de pedidos no admin** ainda: os pedidos são gravados e consultáveis no banco,
+  mas não há UI de listagem/filtro/status. É o próximo passo natural se quiser.
 - **Carrinho** fica no `localStorage` do aparelho do cliente (correto: é por pessoa). Se o
-  admin reorganizar o cardápio enquanto alguém está montando a sacola, itens removidos
-  somem da sacola. Por isso: ajuste os preços **antes** do evento.
+  admin **remover** um item enquanto alguém o tem na sacola, ele some da sacola desse
+  cliente (mudança de preço, não — essa é preservada).
+- **E-mail OTP** usa o serviço embutido do Supabase (limite baixo de envios). Para volume
+  de admins maior, configure SMTP próprio no Supabase.
 
 ## Origem
 

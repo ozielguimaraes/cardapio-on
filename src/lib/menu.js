@@ -71,9 +71,17 @@ export async function loadMenu() {
   };
 }
 
-/* Grava o cardápio inteiro de forma atômica (a RPC apaga e reinsere, validando
-   se o usuário logado está na allowlist de admins). */
+/* Grava o cardápio inteiro de forma atômica (a RPC atualiza pelo id, preservando
+   itens existentes), validando se o usuário logado está na allowlist de admins. */
 export async function saveMenu(menu) {
   const { error } = await supabase.rpc("replace_menu", { p_menu: menu });
   if (error) throw error;
+}
+
+/* Cria o pedido no servidor e devolve o número único.
+   payload: { nome, email, telefone, total, itens:[ {nome, preco, qty, sub} ] } */
+export async function createOrder(payload) {
+  const { data, error } = await supabase.rpc("create_order", { p: payload });
+  if (error) throw error;
+  return data; // { number }
 }

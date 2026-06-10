@@ -62,9 +62,25 @@ $$;
 
 grant execute on function public.is_admin() to anon, authenticated;
 
--- Substitui o cardápio inteiro de forma atômica. Só executa se o usuário
--- logado for admin. Recebe o JSON no mesmo formato do app:
---   { "categorias": [ { "nome","tema","itens":[ {"nome","desc","preco"} ] } ] }
+-- Converte texto em uuid; devolve null se não for um uuid válido (itens novos
+-- vêm com id temporário tipo "item-xyz", que tratamos como inserção).
+create or replace function public.try_uuid(t text)
+returns uuid
+language plpgsql
+immutable
+as $$
+begin
+  return t::uuid;
+exception when others then
+  return null;
+end;
+$$;
+
+-- Grava o cardápio inteiro de forma atômica, ATUALIZANDO PELO ID (não apaga e
+-- recria). Itens/categorias que já existem mantêm seu id — então mudar um preço
+-- durante o evento não esvazia o carrinho de quem está com a página aberta.
+-- Só executa se o usuário logado for admin. JSON no formato do app:
+--   { "categorias": [ { "id?","nome","tema","itens":[ {"id?","nome","desc","preco"} ] } ] }
 create or replace function public.replace_menu(p_menu jsonb)
 returns void
 language plpgsql
@@ -74,46 +90,178 @@ as $$
 declare
   cat jsonb;
   it jsonb;
-  new_cat_id uuid;
+  v_cat_id uuid;
+  v_item_id uuid;
   cat_pos int := 0;
   it_pos int;
+  keep_cat_ids uuid[] := '{}';
+  keep_item_ids uuid[];
 begin
   if not public.is_admin() then
     raise exception 'not authorized';
   end if;
 
-  delete from public.categories;  -- cascade apaga os items
-
   for cat in select * from jsonb_array_elements(p_menu -> 'categorias')
   loop
-    insert into public.categories (name, theme, position)
-    values (cat ->> 'nome', coalesce(cat ->> 'tema', 'verde-escuro'), cat_pos)
-    returning id into new_cat_id;
+    v_cat_id := public.try_uuid(cat ->> 'id');
+    if v_cat_id is not null and exists (select 1 from public.categories where id = v_cat_id) then
+      update public.categories
+        set name = cat ->> 'nome',
+            theme = coalesce(cat ->> 'tema', 'verde-escuro'),
+            position = cat_pos
+        where id = v_cat_id;
+    else
+      insert into public.categories (name, theme, position)
+        values (cat ->> 'nome', coalesce(cat ->> 'tema', 'verde-escuro'), cat_pos)
+        returning id into v_cat_id;
+    end if;
+    keep_cat_ids := keep_cat_ids || v_cat_id;
 
-    cat_pos := cat_pos + 1;
     it_pos := 0;
-
+    keep_item_ids := '{}';
     for it in select * from jsonb_array_elements(coalesce(cat -> 'itens', '[]'::jsonb))
     loop
-      insert into public.items (category_id, name, description, price, position)
-      values (
-        new_cat_id,
-        it ->> 'nome',
-        coalesce(it ->> 'desc', ''),
-        coalesce((it ->> 'preco')::numeric, 0),
-        it_pos
-      );
+      v_item_id := public.try_uuid(it ->> 'id');
+      if v_item_id is not null and exists (
+        select 1 from public.items where id = v_item_id and category_id = v_cat_id
+      ) then
+        update public.items
+          set name = it ->> 'nome',
+              description = coalesce(it ->> 'desc', ''),
+              price = coalesce((it ->> 'preco')::numeric, 0),
+              position = it_pos
+          where id = v_item_id;
+      else
+        insert into public.items (category_id, name, description, price, position)
+          values (v_cat_id, it ->> 'nome', coalesce(it ->> 'desc', ''),
+                  coalesce((it ->> 'preco')::numeric, 0), it_pos)
+          returning id into v_item_id;
+      end if;
+      keep_item_ids := keep_item_ids || v_item_id;
       it_pos := it_pos + 1;
     end loop;
+
+    -- remove itens que saíram desta categoria
+    delete from public.items where category_id = v_cat_id and not (id = any(keep_item_ids));
+
+    cat_pos := cat_pos + 1;
   end loop;
+
+  -- remove categorias que saíram do cardápio (cascata apaga seus itens)
+  delete from public.categories where not (id = any(keep_cat_ids));
 end;
 $$;
 
 grant execute on function public.replace_menu(jsonb) to authenticated;
 
+-- ---------- PEDIDOS ----------
+
+-- Contador central e atômico: garante número único, sem repetir entre celulares.
+create sequence if not exists public.order_number_seq;
+
+create table if not exists public.orders (
+  id uuid primary key default gen_random_uuid(),
+  number int not null unique,
+  customer_name text not null,
+  customer_email text not null default '',
+  customer_phone text not null default '',
+  total numeric(10, 2) not null,
+  status text not null default 'NOVO',
+  created_at timestamptz not null default now()
+);
+
+-- Itens guardam um SNAPSHOT (nome e preço no momento do pedido), então editar o
+-- cardápio depois não altera pedidos já feitos.
+create table if not exists public.order_items (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid not null references public.orders(id) on delete cascade,
+  name text not null,
+  unit_price numeric(10, 2) not null,
+  quantity int not null,
+  subtotal numeric(10, 2) not null,
+  position int not null default 0
+);
+
+alter table public.orders enable row level security;
+alter table public.order_items enable row level security;
+
+-- Pedidos não têm leitura pública; só o admin enxerga (para o caixa/relatórios).
+-- A criação acontece pela função create_order (security definer), não por insert direto.
+drop policy if exists "admin read orders" on public.orders;
+create policy "admin read orders" on public.orders for select using (public.is_admin());
+
+drop policy if exists "admin read order_items" on public.order_items;
+create policy "admin read order_items" on public.order_items for select using (public.is_admin());
+
+-- Cria um pedido e devolve o número único. Chamável pelo cliente (anon).
+-- Payload: { nome, email, telefone, total, itens:[ {nome, preco, qty, sub} ] }
+create or replace function public.create_order(p jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_number int;
+  v_order_id uuid;
+  it jsonb;
+  pos int := 0;
+begin
+  if coalesce(trim(p ->> 'nome'), '') = '' then
+    raise exception 'nome obrigatório';
+  end if;
+  if jsonb_array_length(coalesce(p -> 'itens', '[]'::jsonb)) = 0 then
+    raise exception 'pedido vazio';
+  end if;
+
+  v_number := nextval('public.order_number_seq');
+
+  insert into public.orders (number, customer_name, customer_email, customer_phone, total)
+    values (
+      v_number,
+      p ->> 'nome',
+      coalesce(p ->> 'email', ''),
+      coalesce(p ->> 'telefone', ''),
+      coalesce((p ->> 'total')::numeric, 0)
+    )
+    returning id into v_order_id;
+
+  for it in select * from jsonb_array_elements(p -> 'itens')
+  loop
+    insert into public.order_items (order_id, name, unit_price, quantity, subtotal, position)
+      values (
+        v_order_id,
+        it ->> 'nome',
+        coalesce((it ->> 'preco')::numeric, 0),
+        coalesce((it ->> 'qty')::int, 1),
+        coalesce((it ->> 'sub')::numeric, 0),
+        pos
+      );
+    pos := pos + 1;
+  end loop;
+
+  return jsonb_build_object('number', v_number);
+end;
+$$;
+
+grant execute on function public.create_order(jsonb) to anon, authenticated;
+
+-- ---------- REALTIME ----------
+-- Permite que o cardápio dos clientes atualize ao vivo quando o admin salva.
+do $$
+begin
+  alter publication supabase_realtime add table public.categories;
+exception when duplicate_object then null;
+end $$;
+do $$
+begin
+  alter publication supabase_realtime add table public.items;
+exception when duplicate_object then null;
+end $$;
+
 -- ---------- ALLOWLIST ----------
 -- Troque pelo(s) e-mail(s) que poderão editar o cardápio:
-insert into public.admins (email) values ('admin@cardapioon.com.br')
+insert into public.admins (email) values ('microzapple@gmail.com')
 on conflict (email) do nothing;
 
 -- ---------- SEMENTE INICIAL ----------

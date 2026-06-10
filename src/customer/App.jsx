@@ -1,29 +1,49 @@
 /* ===== CARDÁPIO ON — app do cliente ===== */
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { fmt } from "../lib/format.js";
-import { loadMenu } from "../lib/menu.js";
+import { loadMenu, createOrder } from "../lib/menu.js";
+import { supabase } from "../lib/supabase.js";
 
 const CART_KEY = "cardapio_on_cart_v1";
 
 function useMenu() {
   const [state, setState] = useState({ status: "loading", menu: null, error: "" });
 
-  const reload = () => {
-    loadMenu()
-      .then((menu) => setState({ status: "ready", menu, error: "" }))
-      .catch((e) => setState({ status: "error", menu: null, error: e.message || String(e) }));
-  };
-
   useEffect(() => {
+    let debounce = null;
+    const reload = () => {
+      loadMenu()
+        .then((menu) => setState({ status: "ready", menu, error: "" }))
+        .catch((e) => setState((s) =>
+          // se já tem cardápio na tela, não troca por erro (ex.: blip de rede no realtime)
+          s.status === "ready" ? s : { status: "error", menu: null, error: e.message || String(e) }
+        ));
+    };
+    const reloadDebounced = () => {
+      clearTimeout(debounce);
+      debounce = setTimeout(reload, 350);
+    };
+
     reload();
-    // recarrega ao voltar pra aba (pega edições recém-feitas no admin)
+
+    // recarrega ao voltar pra aba (sai e volta do app)
     const onFocus = () => reload();
     const onVisible = () => { if (document.visibilityState === "visible") reload(); };
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVisible);
+
+    // atualização ao vivo: quando o admin salva, o cardápio atualiza sozinho
+    const channel = supabase
+      .channel("menu-changes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "categories" }, reloadDebounced)
+      .on("postgres_changes", { event: "*", schema: "public", table: "items" }, reloadDebounced)
+      .subscribe();
+
     return () => {
+      clearTimeout(debounce);
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisible);
+      supabase.removeChannel(channel);
     };
   }, []);
 
@@ -101,14 +121,19 @@ function App() {
     if (el) window.scrollTo({ top: el.offsetTop - 118, behavior: "smooth" });
   };
 
-  const finalizar = (contato) => {
-    let n = 0;
-    try { n = parseInt(localStorage.getItem("cardapio_on_counter") || "0", 10); } catch (e) {}
-    n += 1;
-    localStorage.setItem("cardapio_on_counter", String(n));
+  // gera o pedido no servidor (número único, sem repetir entre celulares)
+  const finalizar = async (contato) => {
+    const payload = {
+      nome: contato.nome.trim(),
+      email: contato.email.trim(),
+      telefone: contato.telefone.trim(),
+      total,
+      itens: lines.map((l) => ({ nome: l.nome, preco: l.preco, qty: l.qty, sub: l.sub })),
+    };
+    const res = await createOrder(payload);
     try { localStorage.setItem("cardapio_on_customer", JSON.stringify(contato)); } catch (e) {}
     setConfirm({
-      num: String(n).padStart(3, "0"),
+      num: String(res.number).padStart(3, "0"),
       nome: contato.nome.trim(),
       email: contato.email.trim(),
       telefone: contato.telefone.trim(),
@@ -235,6 +260,8 @@ function CartSheet({ open, onClose, lines, total, setQty, onFinalize }) {
   const [email, setEmail] = useState(saved.email || "");
   const [telefone, setTelefone] = useState(saved.telefone || "");
   const [touched, setTouched] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitErr, setSubmitErr] = useState("");
 
   const nomeOk = nome.trim().length >= 2;
   const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
@@ -250,9 +277,18 @@ function CartSheet({ open, onClose, lines, total, setQty, onFinalize }) {
     return "(" + d.slice(0, 2) + ") " + d.slice(2, 7) + "-" + d.slice(7);
   };
 
-  const submit = () => {
+  const submit = async () => {
     setTouched(true);
-    if (formOk) onFinalize({ nome, email, telefone });
+    if (!formOk || submitting) return;
+    setSubmitting(true);
+    setSubmitErr("");
+    try {
+      await onFinalize({ nome, email, telefone });
+    } catch (e) {
+      setSubmitErr("Não foi possível gerar o pedido. Verifique a conexão e tente de novo.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -328,8 +364,9 @@ function CartSheet({ open, onClose, lines, total, setQty, onFinalize }) {
               />
               {touched && !telOk ? <span className="field-err">Telefone inválido</span> : null}
             </div>
-            <button className="btn-primary" onClick={submit}>
-              Gerar pedido pro caixa
+            {submitErr ? <span className="field-err" style={{ margin: "0 4px 8px" }}>{submitErr}</span> : null}
+            <button className="btn-primary" onClick={submit} disabled={submitting}>
+              {submitting ? "Gerando pedido…" : "Gerar pedido pro caixa"}
             </button>
             <button className="btn-ghost" onClick={onClose}>Continuar escolhendo</button>
           </React.Fragment>
