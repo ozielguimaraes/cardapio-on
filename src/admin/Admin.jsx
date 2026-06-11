@@ -231,6 +231,12 @@ function Editor({ onLogout }) {
                 <div className="names">
                   <input className="in-nome" value={it.nome} placeholder="Nome do item" onChange={(e) => editItem(ci, ii, "nome", e.target.value)} />
                   <input className="in-desc" value={it.desc || ""} placeholder="Descrição (opcional)" onChange={(e) => editItem(ci, ii, "desc", e.target.value)} />
+                  <button
+                    className={"soldout-toggle" + (it.esgotado ? " on" : "")}
+                    onClick={() => editItem(ci, ii, "esgotado", !it.esgotado)}
+                  >
+                    {it.esgotado ? "✕ Esgotado" : "Marcar esgotado"}
+                  </button>
                 </div>
                 <div className="price-wrap">
                   <span className="rs">R$</span>

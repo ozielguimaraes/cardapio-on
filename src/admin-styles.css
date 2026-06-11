@@ -78,6 +78,9 @@ input { font-family: inherit; }
 .item-del { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; color: var(--danger); font-size: 18px; }
 .item-del:active { background: #fbe9e7; }
 
+.soldout-toggle { align-self: flex-start; font-size: 12px; font-weight: 700; color: var(--muted); border: 1.5px solid var(--line); border-radius: 999px; padding: 5px 10px; background: #fff; }
+.soldout-toggle.on { color: #fff; background: var(--danger); border-color: var(--danger); }
+
 .add-item-btn { width: 100%; margin-top: 10px; border: 1.5px dashed var(--green); color: var(--green-dark); font-weight: 800; font-size: 14px; padding: 11px; border-radius: 12px; background: rgba(147, 184, 92, 0.08); }
 .add-item-btn:active { background: rgba(147, 184, 92, 0.2); }
 

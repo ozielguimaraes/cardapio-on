@@ -26,9 +26,13 @@ create table if not exists public.items (
   name text not null,
   description text not null default '',
   price numeric(10, 2) not null default 0,
+  sold_out boolean not null default false,
   position int not null default 0,
   created_at timestamptz not null default now()
 );
+
+-- Bancos criados antes do campo "esgotado": adiciona a coluna sem perder dados.
+alter table public.items add column if not exists sold_out boolean not null default false;
 
 -- ---------- RLS ----------
 alter table public.admins enable row level security;
@@ -80,7 +84,7 @@ $$;
 -- recria). Itens/categorias que já existem mantêm seu id — então mudar um preço
 -- durante o evento não esvazia o carrinho de quem está com a página aberta.
 -- Só executa se o usuário logado for admin. JSON no formato do app:
---   { "categorias": [ { "id?","nome","tema","itens":[ {"id?","nome","desc","preco"} ] } ] }
+--   { "categorias": [ { "id?","nome","tema","itens":[ {"id?","nome","desc","preco","esgotado?"} ] } ] }
 create or replace function public.replace_menu(p_menu jsonb)
 returns void
 language plpgsql
@@ -129,12 +133,14 @@ begin
           set name = it ->> 'nome',
               description = coalesce(it ->> 'desc', ''),
               price = coalesce((it ->> 'preco')::numeric, 0),
+              sold_out = coalesce((it ->> 'esgotado')::boolean, false),
               position = it_pos
           where id = v_item_id;
       else
-        insert into public.items (category_id, name, description, price, position)
+        insert into public.items (category_id, name, description, price, sold_out, position)
           values (v_cat_id, it ->> 'nome', coalesce(it ->> 'desc', ''),
-                  coalesce((it ->> 'preco')::numeric, 0), it_pos)
+                  coalesce((it ->> 'preco')::numeric, 0),
+                  coalesce((it ->> 'esgotado')::boolean, false), it_pos)
           returning id into v_item_id;
       end if;
       keep_item_ids := keep_item_ids || v_item_id;

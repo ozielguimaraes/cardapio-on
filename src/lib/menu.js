@@ -50,7 +50,7 @@ export const DEFAULT_MENU = {
 export async function loadMenu() {
   const { data, error } = await supabase
     .from("categories")
-    .select("id,name,theme,position,items(id,name,description,price,position)")
+    .select("id,name,theme,position,items(id,name,description,price,sold_out,position)")
     .order("position", { ascending: true })
     .order("position", { referencedTable: "items", ascending: true });
 
@@ -66,6 +66,7 @@ export async function loadMenu() {
         nome: it.name,
         desc: it.description || "",
         preco: Number(it.price),
+        esgotado: !!it.sold_out,
       })),
     })),
   };

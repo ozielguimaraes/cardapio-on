@@ -121,6 +121,15 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 }
 .items.theme-laranja .item-price { color: var(--orange-2); }
 
+/* esgotado: visível, mas esmaecido e sem botão de adicionar */
+.item.soldout { opacity: 0.55; }
+.item.soldout .item-name { text-decoration: line-through; }
+.soldout-badge {
+  flex: 0 0 auto; font-size: 11px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  color: #a02012; background: #fbe9e7; border-radius: 999px; padding: 6px 10px;
+}
+
 /* add / stepper */
 .add-btn {
   flex: 0 0 auto; width: 42px; height: 42px; border-radius: 14px;

@@ -94,8 +94,9 @@ function App() {
     setTimeout(() => setBumpId(null), 340);
   };
 
+  // item esgotado sai do carrinho (mesmo caminho de item removido do cardápio)
   const lines = Object.entries(cart)
-    .filter(([id]) => lookup[id])
+    .filter(([id]) => lookup[id] && !lookup[id].esgotado)
     .map(([id, qty]) => ({ ...lookup[id], qty, sub: lookup[id].preco * qty }));
   const totalItens = lines.reduce((s, l) => s + l.qty, 0);
   const total = lines.reduce((s, l) => s + l.sub, 0);
@@ -203,13 +204,15 @@ function App() {
               {c.itens.map((it) => {
                 const qty = cart[it.id] || 0;
                 return (
-                  <div key={it.id} className={"item" + (bumpId === it.id ? " bump" : "")}>
+                  <div key={it.id} className={"item" + (bumpId === it.id ? " bump" : "") + (it.esgotado ? " soldout" : "")}>
                     <div className="item-info">
                       <div className="item-name">{it.nome}</div>
                       {it.desc ? <div className="item-desc">{it.desc}</div> : null}
                       <div className="item-price">{fmt(it.preco)}</div>
                     </div>
-                    {qty === 0 ? (
+                    {it.esgotado ? (
+                      <span className="soldout-badge">Esgotado</span>
+                    ) : qty === 0 ? (
                       <button className="add-btn" onClick={() => add(it.id)} aria-label={"Adicionar " + it.nome}>+</button>
                     ) : (
                       <div className="stepper">
